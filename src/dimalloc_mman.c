@@ -203,6 +203,41 @@ static void dim_pool_header_set(const dim_pool_props_t *props, uintptr_t off, ui
     }
 }
 
+static bool dim_pool_read_meta(const dim_pool_props_t *props, const void *address, uintptr_t *off, uintptr_t *ps, uintptr_t *rs) {
+    uintptr_t pool_loc = (uintptr_t) props->loc;
+    uintptr_t pool_hsize = (uintptr_t) props->hsize;
+    uintptr_t pool_dsize = (uintptr_t) props->dsize;
+    uintptr_t loc = (uintptr_t) address;
+
+    if (loc                           <  pool_loc  ) return false;
+    if ((loc - pool_loc)              <  pool_hsize) return false;
+    if ((loc - pool_hsize - pool_loc) >= pool_dsize) return false;
+
+    uintptr_t region_size = 0;
+    uintptr_t prefix_size = 0;
+    int shift = 0;
+
+    unsigned char c;
+    bool loop = true;
+    while (loop) {
+        c = *((unsigned char *) (--loc));
+        if (shift == 56) {
+            loop = false;
+        } else {
+            loop = ((c & 0x80) != 0);
+            c &= 0x7F;
+        }
+        region_size |= (((uintptr_t) c) << shift);
+        shift += 7;
+        prefix_size++;
+    }
+
+    *off = loc - pool_hsize - pool_loc;
+    *ps = prefix_size;
+    *rs = region_size;
+    return true;
+}
+
 // END Internals
 
 // START API
@@ -240,29 +275,13 @@ void *dim_pool_alloc(dim_pool pool, size_t size) {
 void dim_pool_free(dim_pool pool, void *address) {
     dim_pool_props_t props;
     dim_pool_get_props(pool, &props);
-
-    uintptr_t loc = (uintptr_t) address;
-    uintptr_t region_size = 0;
-    uintptr_t prefix_size = 0;
-    int shift = 0;
-
-    unsigned char c;
-    bool loop = true;
-    while (loop) {
-        c = *((unsigned char *) (--loc));
-        if (shift == 56) {
-            loop = false;
-        } else {
-            loop = ((c & 0x80) != 0);
-            c &= 0x7F;
-        }
-        region_size |= (((uintptr_t) c) << shift);
-        shift += 7;
-        prefix_size++;
+    uintptr_t off, ps, rs;
+    if (!dim_pool_read_meta(&props, address, &off, &ps, &rs)) {
+        // Address lies outside valid region
+        errno = EINVAL;
+        return;
     }
-
-    uintptr_t off = loc - ((uintptr_t) props.hsize) - ((uintptr_t) props.loc);
-    dim_pool_header_set(&props, off, region_size + prefix_size, false);
+    dim_pool_header_set(&props, off, ps + rs, false);
 }
 
 // END API
