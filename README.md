@@ -31,6 +31,19 @@ dim_pool_free(pool, buf);
 dim_pool_destroy(pool);
 ```
 
+## Importing (Meson)
+Add a ``dimalloc.wrap`` file to your ``subprojects`` directory:
+```text
+[wrap-git]
+directory = dimalloc-0.1.0
+url = https://github.com/WasabiThumb/dimalloc.git
+revision = HEAD
+depth = 1
+
+[provide]
+dimalloc = dimalloc_dep
+```
+
 ## License
 ```text
 Copyright 2025 Wasabi Codes

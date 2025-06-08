@@ -32,3 +32,8 @@ test_executable = executable(
 )
 
 test('test', test_executable)
+
+dimalloc_dep = declare_dependency(
+    include_directories: includes,
+    link_with: [dimalloc]
+)
