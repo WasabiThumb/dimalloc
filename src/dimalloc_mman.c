@@ -203,6 +203,54 @@ static void dim_pool_header_set(const dim_pool_props_t *props, uintptr_t off, ui
     }
 }
 
+static bool check_homogenous(const void *region, size_t region_len) {
+    const unsigned char *bytes = (const unsigned char *) region;
+
+    // Special case for odd initial length
+    if (region_len & 1 && bytes[0] != bytes[region_len - 1]) {
+        return false;
+    }
+
+    // Continuously divide region in half and compare with upper half
+    size_t part = region_len >> 1;
+    while (part) {
+        if (memcmp(&bytes[0], &bytes[part], part) != 0) return false;
+        part >>= 1;
+    }
+
+    return true;
+}
+
+static bool dim_pool_header_check(const dim_pool_props_t *props, uintptr_t off, uintptr_t len, bool value) {
+    uintptr_t loc = (uintptr_t) props->loc;
+    unsigned char *header = (unsigned char *) loc;
+
+    uintptr_t end_bit = off + len;
+    uintptr_t end_byte = end_bit >> 3;
+    uintptr_t start_byte = off >> 3;
+    unsigned char mask;
+
+    if (start_byte == end_byte) {
+        int a = (int) (off % 8);
+        int b = (int) (end_bit % 8);
+        mask = (0xFF >> a) & (0xFF << (7 - b));
+        return (header[start_byte] & mask) == (value ? mask : 0);
+    } else {
+        mask = 0xFF >> (off & 7);
+        if ((header[start_byte] & mask) != (value ? mask : 0)) return false;
+
+        mask = (0xFF00 >> (end_bit & 7)) & 0xFF;
+        if ((header[end_byte] & mask) != (value ? mask : 0)) return false;
+
+        if (end_byte > (start_byte + 1)) {
+            if (header[start_byte + 1] != (value ? 0xFF : 0x00)) return false;
+            if (!check_homogenous(header + start_byte + 1, end_byte - start_byte - 1)) return false;
+        }
+
+        return true;
+    }
+}
+
 static bool dim_pool_read_meta(const dim_pool_props_t *props, const void *address, uintptr_t *off, uintptr_t *ps, uintptr_t *rs) {
     uintptr_t pool_loc = (uintptr_t) props->loc;
     uintptr_t pool_hsize = (uintptr_t) props->hsize;
@@ -272,6 +320,45 @@ void *dim_pool_alloc(dim_pool pool, size_t size) {
     return (void *) (region + prefix_len);
 }
 
+void *dim_pool_realloc(dim_pool pool, void *address, size_t size) {
+    if (address == NULL)
+        return dim_pool_alloc(pool, size);
+
+    dim_pool_props_t props;
+    dim_pool_get_props(pool, &props);
+
+    uintptr_t off, ps, rs;
+    if (!dim_pool_read_meta(&props, address, &off, &ps, &rs)) {
+        // Address lies outside valid region
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (size < rs) {
+        // Shrink in-place
+        dim_pool_header_set(&props, off + ps + size, rs - size, false);
+        return address;
+    } else if (size == rs) {
+        // No change
+        return address;
+    } else if (dim_pool_header_check(&props, off + ps + rs, size - rs, false)) {
+        // Grow in-place
+        dim_pool_header_set(&props, off, ps + size, true);
+        return address;
+    } else {
+        // Grow by moving
+        void *dest = dim_pool_alloc(pool, size);
+
+        if (dest == NULL) return NULL;
+        memcpy(dest, address, rs);
+
+        // Free the original address (faster than dim_pool_free as preconditions are met)
+        dim_pool_header_set(&props, off, ps + rs, false);
+
+        return dest;
+    }
+}
+
 void dim_pool_free(dim_pool pool, void *address) {
     dim_pool_props_t props;
     dim_pool_get_props(pool, &props);
@@ -281,7 +368,13 @@ void dim_pool_free(dim_pool pool, void *address) {
         errno = EINVAL;
         return;
     }
+    if (ps == 0 || !dim_pool_header_check(&props, off, ps + rs, true)) {
+        // Double free
+        errno = EINVAL;
+        return;
+    }
     dim_pool_header_set(&props, off, ps + rs, false);
+    *(((unsigned char *) address) - 1) = 0;
 }
 
 // END API

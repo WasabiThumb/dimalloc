@@ -52,6 +52,15 @@ void *dim_alloc(size_t size) {
     return dim_pool_alloc(pool, size);
 }
 
+void *dim_realloc(void *address, size_t size) {
+    dim_pool pool = GLOBAL_POOL;
+    if (pool == NULL) {
+        errno = ENOTSUP;
+        return NULL;
+    }
+    return dim_pool_realloc(pool, address, size);
+}
+
 void dim_free(void *address) {
     dim_pool pool = GLOBAL_POOL;
     if (pool == NULL) return;
