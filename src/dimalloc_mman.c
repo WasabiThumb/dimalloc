@@ -3,6 +3,7 @@
 #endif
 #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 #include "dimalloc.h"
 
 
@@ -216,11 +217,15 @@ void *dim_pool_alloc(dim_pool pool, size_t size) {
 
     uintptr_t offset;
     if (total_len < 8) {
-        if (!dim_pool_locate_small(&props, (int) total_len, &offset))
+        if (!dim_pool_locate_small(&props, (int) total_len, &offset)) {
+            errno = ENOMEM;
             return NULL;
+        }
     } else {
-        if (!dim_pool_locate_large(&props, total_len, &offset))
+        if (!dim_pool_locate_large(&props, total_len, &offset)) {
+            errno = ENOMEM;
             return NULL;
+        }
     }
 
     dim_pool_header_set(&props, offset, total_len, true);

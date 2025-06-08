@@ -111,7 +111,7 @@ void dim_pool_destroy(dim_pool pool);
  * Initializes the global pool such that it can hold
  * at least "size" bytes.
  */
-void dim_init(size_t size);
+bool dim_init(size_t size);
 
 /**
  * Reports the properties of the global pool.
