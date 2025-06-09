@@ -352,9 +352,20 @@ void *dim_pool_realloc(dim_pool pool, void *address, size_t size) {
             dim_pool_header_set(&props, off, ps + size, true);
             return address;
         }
+        uintptr_t prefix_extra = new_prefix_len - ps;
+        if (dim_pool_header_check(&props, off + ps + size, prefix_extra, false)) {
+            // Grow in-place-ish
+            void *dest = (void *) (((uintptr_t) address) + prefix_extra);
+            memmove(dest, address, rs);
+            for (uintptr_t i=0; i < new_prefix_len; i++) {
+                *(((char *) dest) - 1 - i) = new_prefix[i];
+            }
+            dim_pool_header_set(&props, off, ps + size + prefix_extra, true);
+            return dest;
+        }
     }
 
-    // Grow by moving
+    // Fallback grow by literal reallocation
     void *dest = dim_pool_alloc(pool, size);
     if (dest == NULL) return NULL;
     memcpy(dest, address, rs);
