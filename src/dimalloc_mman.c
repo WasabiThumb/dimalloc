@@ -342,21 +342,27 @@ void *dim_pool_realloc(dim_pool pool, void *address, size_t size) {
         // No change
         return address;
     } else if (dim_pool_header_check(&props, off + ps + rs, size - rs, false)) {
-        // Grow in-place
-        dim_pool_header_set(&props, off, ps + size, true);
-        return address;
-    } else {
-        // Grow by moving
-        void *dest = dim_pool_alloc(pool, size);
-
-        if (dest == NULL) return NULL;
-        memcpy(dest, address, rs);
-
-        // Free the original address (faster than dim_pool_free as preconditions are met)
-        dim_pool_header_set(&props, off, ps + rs, false);
-
-        return dest;
+        char new_prefix[PREFIX_MAX];
+        uintptr_t new_prefix_len = init_prefix(size, new_prefix);
+        if (new_prefix_len == ps) {
+            // Grow in-place
+            for (uintptr_t i=0; i < ps; i++) {
+                *(((char *) address) - 1 - i) = new_prefix[i];
+            }
+            dim_pool_header_set(&props, off, ps + size, true);
+            return address;
+        }
     }
+
+    // Grow by moving
+    void *dest = dim_pool_alloc(pool, size);
+    if (dest == NULL) return NULL;
+    memcpy(dest, address, rs);
+
+    // Free the original address (faster than dim_pool_free as preconditions are met)
+    dim_pool_header_set(&props, off, ps + rs, false);
+
+    return dest;
 }
 
 void dim_pool_free(dim_pool pool, void *address) {
