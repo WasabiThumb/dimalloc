@@ -372,6 +372,7 @@ void *dim_pool_realloc(dim_pool pool, void *address, size_t size) {
 
     // Free the original address (faster than dim_pool_free as preconditions are met)
     dim_pool_header_set(&props, off, ps + rs, false);
+    *(((unsigned char *) address) - 1) = 0;
 
     return dest;
 }
