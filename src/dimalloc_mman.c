@@ -3,6 +3,7 @@
 #endif
 #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 #include "dimalloc.h"
 
 
@@ -202,41 +203,64 @@ static void dim_pool_header_set(const dim_pool_props_t *props, uintptr_t off, ui
     }
 }
 
-// END Internals
+static bool check_homogenous(const void *region, size_t region_len) {
+    const unsigned char *bytes = (const unsigned char *) region;
 
-// START API
-
-void *dim_pool_alloc(dim_pool pool, size_t size) {
-    dim_pool_props_t props;
-    dim_pool_get_props(pool, &props);
-
-    char prefix[PREFIX_MAX];
-    size_t prefix_len = init_prefix(size, prefix);
-    size_t total_len = size + prefix_len;
-
-    uintptr_t offset;
-    if (total_len < 8) {
-        if (!dim_pool_locate_small(&props, (int) total_len, &offset))
-            return NULL;
-    } else {
-        if (!dim_pool_locate_large(&props, total_len, &offset))
-            return NULL;
+    // Special case for odd initial length
+    if (region_len & 1 && bytes[0] != bytes[region_len - 1]) {
+        return false;
     }
 
-    dim_pool_header_set(&props, offset, total_len, true);
-    char *region = (char *) (((uintptr_t) props.loc) + ((uintptr_t) props.hsize) + offset);
-    for (size_t i=0; i < prefix_len; i++) {
-        region[prefix_len - 1 - i] = prefix[i];
+    // Continuously divide region in half and compare with upper half
+    size_t part = region_len >> 1;
+    while (part) {
+        if (memcmp(&bytes[0], &bytes[part], part) != 0) return false;
+        part >>= 1;
     }
 
-    return (void *) (region + prefix_len);
+    return true;
 }
 
-void dim_pool_free(dim_pool pool, void *address) {
-    dim_pool_props_t props;
-    dim_pool_get_props(pool, &props);
+static bool dim_pool_header_check(const dim_pool_props_t *props, uintptr_t off, uintptr_t len, bool value) {
+    uintptr_t loc = (uintptr_t) props->loc;
+    unsigned char *header = (unsigned char *) loc;
 
+    uintptr_t end_bit = off + len;
+    uintptr_t end_byte = end_bit >> 3;
+    uintptr_t start_byte = off >> 3;
+    unsigned char mask;
+
+    if (start_byte == end_byte) {
+        int a = (int) (off % 8);
+        int b = (int) (end_bit % 8);
+        mask = (0xFF >> a) & (0xFF << (7 - b));
+        return (header[start_byte] & mask) == (value ? mask : 0);
+    } else {
+        mask = 0xFF >> (off & 7);
+        if ((header[start_byte] & mask) != (value ? mask : 0)) return false;
+
+        mask = (0xFF00 >> (end_bit & 7)) & 0xFF;
+        if ((header[end_byte] & mask) != (value ? mask : 0)) return false;
+
+        if (end_byte > (start_byte + 1)) {
+            if (header[start_byte + 1] != (value ? 0xFF : 0x00)) return false;
+            if (!check_homogenous(header + start_byte + 1, end_byte - start_byte - 1)) return false;
+        }
+
+        return true;
+    }
+}
+
+static bool dim_pool_read_meta(const dim_pool_props_t *props, const void *address, uintptr_t *off, uintptr_t *ps, uintptr_t *rs) {
+    uintptr_t pool_loc = (uintptr_t) props->loc;
+    uintptr_t pool_hsize = (uintptr_t) props->hsize;
+    uintptr_t pool_dsize = (uintptr_t) props->dsize;
     uintptr_t loc = (uintptr_t) address;
+
+    if (loc                           <  pool_loc  ) return false;
+    if ((loc - pool_loc)              <  pool_hsize) return false;
+    if ((loc - pool_hsize - pool_loc) >= pool_dsize) return false;
+
     uintptr_t region_size = 0;
     uintptr_t prefix_size = 0;
     int shift = 0;
@@ -256,8 +280,119 @@ void dim_pool_free(dim_pool pool, void *address) {
         prefix_size++;
     }
 
-    uintptr_t off = loc - ((uintptr_t) props.hsize) - ((uintptr_t) props.loc);
-    dim_pool_header_set(&props, off, region_size + prefix_size, false);
+    *off = loc - pool_hsize - pool_loc;
+    *ps = prefix_size;
+    *rs = region_size;
+    return true;
+}
+
+// END Internals
+
+// START API
+
+void *dim_pool_alloc(dim_pool pool, size_t size) {
+    dim_pool_props_t props;
+    dim_pool_get_props(pool, &props);
+
+    char prefix[PREFIX_MAX];
+    size_t prefix_len = init_prefix(size, prefix);
+    size_t total_len = size + prefix_len;
+
+    uintptr_t offset;
+    if (total_len < 8) {
+        if (!dim_pool_locate_small(&props, (int) total_len, &offset)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    } else {
+        if (!dim_pool_locate_large(&props, total_len, &offset)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+
+    dim_pool_header_set(&props, offset, total_len, true);
+    char *region = (char *) (((uintptr_t) props.loc) + ((uintptr_t) props.hsize) + offset);
+    for (size_t i=0; i < prefix_len; i++) {
+        region[prefix_len - 1 - i] = prefix[i];
+    }
+
+    return (void *) (region + prefix_len);
+}
+
+void *dim_pool_realloc(dim_pool pool, void *address, size_t size) {
+    if (address == NULL)
+        return dim_pool_alloc(pool, size);
+
+    dim_pool_props_t props;
+    dim_pool_get_props(pool, &props);
+
+    uintptr_t off, ps, rs;
+    if (!dim_pool_read_meta(&props, address, &off, &ps, &rs)) {
+        // Address lies outside valid region
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (size < rs) {
+        // Shrink in-place
+        dim_pool_header_set(&props, off + ps + size, rs - size, false);
+        return address;
+    } else if (size == rs) {
+        // No change
+        return address;
+    } else if (dim_pool_header_check(&props, off + ps + rs, size - rs, false)) {
+        char new_prefix[PREFIX_MAX];
+        uintptr_t new_prefix_len = init_prefix(size, new_prefix);
+        if (new_prefix_len == ps) {
+            // Grow in-place
+            for (uintptr_t i=0; i < ps; i++) {
+                *(((char *) address) - 1 - i) = new_prefix[i];
+            }
+            dim_pool_header_set(&props, off, ps + size, true);
+            return address;
+        }
+        uintptr_t prefix_extra = new_prefix_len - ps;
+        if (dim_pool_header_check(&props, off + ps + size, prefix_extra, false)) {
+            // Grow in-place-ish
+            void *dest = (void *) (((uintptr_t) address) + prefix_extra);
+            memmove(dest, address, rs);
+            for (uintptr_t i=0; i < new_prefix_len; i++) {
+                *(((char *) dest) - 1 - i) = new_prefix[i];
+            }
+            dim_pool_header_set(&props, off, ps + size + prefix_extra, true);
+            return dest;
+        }
+    }
+
+    // Fallback grow by literal reallocation
+    void *dest = dim_pool_alloc(pool, size);
+    if (dest == NULL) return NULL;
+    memcpy(dest, address, rs);
+
+    // Free the original address (faster than dim_pool_free as preconditions are met)
+    dim_pool_header_set(&props, off, ps + rs, false);
+    *(((unsigned char *) address) - 1) = 0;
+
+    return dest;
+}
+
+void dim_pool_free(dim_pool pool, void *address) {
+    dim_pool_props_t props;
+    dim_pool_get_props(pool, &props);
+    uintptr_t off, ps, rs;
+    if (!dim_pool_read_meta(&props, address, &off, &ps, &rs)) {
+        // Address lies outside valid region
+        errno = EINVAL;
+        return;
+    }
+    if (ps == 0 || !dim_pool_header_check(&props, off, ps + rs, true)) {
+        // Double free
+        errno = EINVAL;
+        return;
+    }
+    dim_pool_header_set(&props, off, ps + rs, false);
+    *(((unsigned char *) address) - 1) = 0;
 }
 
 // END API

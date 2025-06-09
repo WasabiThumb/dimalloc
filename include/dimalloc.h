@@ -20,11 +20,13 @@
  * - dim_pool_create(size)
  * - dim_pool_alloc(pool, size)
  * - dim_pool_free(pool, pointer)
+ * - dim_pool_realloc(pool, pointer, size)
  * - dim_pool_destroy(pool)
  *
  * Global Pool Methods:
  * - dim_init(size)
  * - dim_alloc(size)
+ * - dim_realloc(pointer, size)
  * - dim_free(address)
  */
 
@@ -94,6 +96,12 @@ void dim_pool_get_props(dim_pool pool, dim_pool_props_t *props);
 void *dim_pool_alloc(dim_pool pool, size_t size);
 
 /**
+ * Reallocates a block of memory previously allocated by
+ * dim_pool_alloc.
+ */
+void *dim_pool_realloc(dim_pool pool, void *address, size_t size);
+
+/**
  * Frees a block of memory previously allocated
  * by dim_pool_alloc.
  */
@@ -111,7 +119,7 @@ void dim_pool_destroy(dim_pool pool);
  * Initializes the global pool such that it can hold
  * at least "size" bytes.
  */
-void dim_init(size_t size);
+bool dim_init(size_t size);
 
 /**
  * Reports the properties of the global pool.
@@ -125,6 +133,12 @@ bool dim_get_props(dim_pool_props_t *props);
  * called previously.
  */
 void *dim_alloc(size_t size);
+
+/**
+ * Reallocates a block of memory previously allocated by
+ * dim_alloc.
+ */
+void *dim_realloc(void *address, size_t size);
 
 /**
  * Frees a block of memory previously allocated by
