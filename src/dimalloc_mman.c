@@ -205,20 +205,8 @@ static void dim_pool_header_set(const dim_pool_props_t *props, uintptr_t off, ui
 
 static bool check_homogenous(const void *region, size_t region_len) {
     const unsigned char *bytes = (const unsigned char *) region;
-
-    // Special case for odd initial length
-    if (region_len & 1 && bytes[0] != bytes[region_len - 1]) {
-        return false;
-    }
-
-    // Continuously divide region in half and compare with upper half
-    size_t part = region_len >> 1;
-    while (part) {
-        if (memcmp(&bytes[0], &bytes[part], part) != 0) return false;
-        part >>= 1;
-    }
-
-    return true;
+    if (region_len < 2) return true;
+    return memcmp(bytes, bytes + 1, region_len - 1) == 0;
 }
 
 static bool dim_pool_header_check(const dim_pool_props_t *props, uintptr_t off, uintptr_t len, bool value) {
