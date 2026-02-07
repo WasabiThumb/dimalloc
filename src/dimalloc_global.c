@@ -24,22 +24,41 @@
 
 static thread_local dim_pool GLOBAL_POOL = NULL;
 
-void dim_init(size_t size) {
+bool dim_init(size_t size) {
     if (GLOBAL_POOL != NULL) dim_pool_destroy(GLOBAL_POOL);
-    GLOBAL_POOL = dim_pool_create(size);
+    if ((GLOBAL_POOL = dim_pool_create(size)) == NULL) {
+        errno = ENOMEM;
+        return false;
+    }
+    return true;
 }
 
 bool dim_get_props(dim_pool_props_t *props) {
     dim_pool pool = GLOBAL_POOL;
-    if (pool == NULL) return false;
+    if (pool == NULL) {
+        errno = ENOTSUP;
+        return false;
+    }
     dim_pool_get_props(pool, props);
     return true;
 }
 
 void *dim_alloc(size_t size) {
     dim_pool pool = GLOBAL_POOL;
-    if (pool == NULL) return NULL;
+    if (pool == NULL) {
+        errno = ENOTSUP;
+        return NULL;
+    }
     return dim_pool_alloc(pool, size);
+}
+
+void *dim_realloc(void *address, size_t size) {
+    dim_pool pool = GLOBAL_POOL;
+    if (pool == NULL) {
+        errno = ENOTSUP;
+        return NULL;
+    }
+    return dim_pool_realloc(pool, address, size);
 }
 
 void dim_free(void *address) {
@@ -47,4 +66,3 @@ void dim_free(void *address) {
     if (pool == NULL) return;
     dim_pool_free(pool, address);
 }
-
